@@ -1,0 +1,154 @@
+const express = require('express');
+const router = express.Router();
+const { User } = require('../models');
+
+// GET /api/users - Tüm kullanıcıları listele (Database integrated)
+router.get('/', async (req, res) => {
+  try {
+    const users = await User.findAll({
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({
+      success: true,
+      data: users,
+      message: 'Users retrieved successfully'
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// GET /api/users/:id - Belirli bir kullanıcıyı getir (Database integrated)
+router.get('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const user = await User.findByPk(id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        message: `User with ID ${id} does not exist`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: user,
+      message: 'User retrieved successfully'
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/users - Yeni kullanıcı oluştur (Database integrated)
+router.post('/', async (req, res) => {
+  try {
+    const { phoneNumber, firstName, lastName, dateOfBirth, emergencyContact, caseWorkerName } = req.body;
+    
+    // Validation
+    if (!firstName || !lastName || !phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'First name, last name, and phone number are required'
+      });
+    }
+
+    const newUser = await User.create({
+      phoneNumber,
+      firstName,
+      lastName,
+      dateOfBirth: dateOfBirth || null,
+      emergencyContact: emergencyContact || '',
+      caseWorkerName: caseWorkerName || 'Sarah Johnson',
+      encryptedPin: 'temp_pin', // Auth sisteminde düzeltilecek
+      isActive: true
+    });
+
+    res.status(201).json({
+      success: true,
+      data: newUser,
+      message: 'User created successfully'
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// PUT /api/users/:id - Kullanıcıyı güncelle (Database integrated)
+router.put('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const updates = req.body;
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        message: `User with ID ${id} does not exist`
+      });
+    }
+
+    await user.update(updates);
+
+    res.json({
+      success: true,
+      data: user,
+      message: 'User updated successfully'
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// DELETE /api/users/:id - Kullanıcıyı sil (Database integrated)
+router.delete('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        message: `User with ID ${id} does not exist`
+      });
+    }
+
+    await user.destroy();
+
+    res.json({
+      success: true,
+      data: user,
+      message: 'User deleted successfully'
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+module.exports = router;

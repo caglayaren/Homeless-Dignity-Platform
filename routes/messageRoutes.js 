@@ -1,0 +1,86 @@
+const express = require('express');
+const router = express.Router();
+const { Message } = require('../models');
+const { Op } = require('sequelize');
+
+// GET /api/messages - Mesajları listele (Database integrated)
+router.get('/', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    let whereClause = {};
+    
+    if (userId) {
+      whereClause = {
+        [Op.or]: [
+          { senderId: parseInt(userId) },
+          { receiverId: parseInt(userId) }
+        ]
+      };
+    }
+
+    const messages = await Message.findAll({
+      where: whereClause,
+      order: [['createdAt', 'ASC']]
+    });
+    
+    res.json({
+      success: true,
+      count: messages.length,
+      data: messages
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// POST /api/messages - Yeni mesaj gönder (Database integrated)
+router.post('/', async (req, res) => {
+  try {
+    const { senderId, receiverId, content, isFromCaseWorker, senderName } = req.body;
+    
+    // Validation
+    if (!content) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'Content is required'
+      });
+    }
+
+    const newMessage = await Message.create({
+      senderId: senderId || 1,
+      receiverId: receiverId || 1,
+      content,
+      isFromCaseWorker: isFromCaseWorker || false,
+      senderName: senderName || 'User',
+      messageType: 'text',
+      isRead: false,
+      isUrgent: false
+    });
+
+    // Socket.IO ile real-time mesaj gönderme
+    if (req.app && req.app.get('io')) {
+      const io = req.app.get('io');
+      io.to(`user-${receiverId || 1}`).emit('new-message', newMessage);
+    }
+    
+    res.status(201).json({
+      success: true,
+      message: 'Message sent successfully',
+      data: newMessage
+    });
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(400).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+module.exports = router;

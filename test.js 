@@ -1,0 +1,16 @@
+console.log('Test başladı');
+
+const express = require('express');
+console.log('Express yüklendi');
+
+const app = express();
+console.log('App oluşturuldu');
+
+app.get('/', (req, res) => {
+  res.send('Hello World!');
+});
+
+app.listen(3000, () => {
+  console.log('🚀 Server 3000 portunda çalışıyor!');
+  console.log('🔗 Tarayıcıda http://localhost:3000 adresini ziyaret edin');
+});

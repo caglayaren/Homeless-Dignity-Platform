@@ -1,0 +1,497 @@
+const express = require('express');
+const router = express.Router();
+const { Appointment, User, CaseWorker } = require('../models');
+const { Op } = require('sequelize');
+
+// GET /api/appointments - Randevuları listele (Database integrated)
+router.get('/', async (req, res) => {
+  try {
+    const { userId, status, caseWorkerId, date, type } = req.query;
+    
+    let whereClause = {};
+    
+    // Filtering options
+    if (userId) {
+      whereClause.userId = parseInt(userId);
+    }
+    
+    if (status) {
+      whereClause.status = status;
+    }
+    
+    if (caseWorkerId) {
+      whereClause.caseWorkerId = parseInt(caseWorkerId);
+    }
+    
+    if (type) {
+      whereClause.type = type;
+    }
+    
+    if (date) {
+      whereClause.date = date;
+    }
+
+    const appointments = await Appointment.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+        },
+        {
+          model: CaseWorker,
+          as: 'caseWorker',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'phone'],
+          required: false // LEFT JOIN
+        }
+      ],
+      order: [['date', 'DESC'], ['time', 'DESC']]
+    });
+    
+    res.json({
+      success: true,
+      count: appointments.length,
+      data: appointments
+    });
+  } catch (error) {
+    console.error('Database error in GET /appointments:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      message: 'Failed to retrieve appointments'
+    });
+  }
+});
+
+// GET /api/appointments/:id - Belirli bir randevuyu getir
+router.get('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    if (isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid appointment ID',
+        message: 'Appointment ID must be a number'
+      });
+    }
+
+    const appointment = await Appointment.findByPk(id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName', 'phoneNumber', 'emergencyContact']
+        },
+        {
+          model: CaseWorker,
+          as: 'caseWorker',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'organization'],
+          required: false
+        }
+      ]
+    });
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Appointment not found',
+        message: `Appointment with ID ${id} does not exist`
+      });
+    }
+
+    res.json({
+      success: true,
+      data: appointment
+    });
+  } catch (error) {
+    console.error('Database error in GET /appointments/:id:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      message: 'Failed to retrieve appointment'
+    });
+  }
+});
+
+// POST /api/appointments - Yeni randevu oluştur (Database integrated)
+router.post('/', async (req, res) => {
+  try {
+    const { 
+      userId, 
+      caseWorkerId, 
+      date, 
+      time, 
+      type, 
+      location, 
+      caseWorkerName, 
+      purpose, 
+      notes,
+      reminderSent 
+    } = req.body;
+    
+    // Validation
+    if (!userId || !date || !time || !type) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'User ID, date, time, and type are required'
+      });
+    }
+
+    // Validate user exists
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID',
+        message: `User with ID ${userId} does not exist`
+      });
+    }
+
+    // Validate case worker exists (if provided)
+    if (caseWorkerId) {
+      const caseWorker = await CaseWorker.findByPk(caseWorkerId);
+      if (!caseWorker) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid case worker ID',
+          message: `Case worker with ID ${caseWorkerId} does not exist`
+        });
+      }
+    }
+
+    // Check for conflicting appointments (same user, same date/time)
+    const conflictingAppointment = await Appointment.findOne({
+      where: {
+        userId,
+        date,
+        time,
+        status: {
+          [Op.not]: 'cancelled'
+        }
+      }
+    });
+
+    if (conflictingAppointment) {
+      return res.status(400).json({
+        success: false,
+        error: 'Appointment conflict',
+        message: `User already has an appointment at ${time} on ${date}`
+      });
+    }
+
+    const newAppointment = await Appointment.create({
+      userId,
+      caseWorkerId: caseWorkerId || null,
+      date,
+      time,
+      type,
+      status: 'scheduled',
+      location: location || (type === 'in-person' ? 'Social Services Center, Room 205' : ''),
+      caseWorkerName: caseWorkerName || 'Sarah Johnson',
+      purpose: purpose || 'General consultation',
+      notes: notes || '',
+      reminderSent: reminderSent || false
+    });
+
+    // Fetch the created appointment with associations
+    const appointmentWithAssociations = await Appointment.findByPk(newAppointment.id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+        },
+        {
+          model: CaseWorker,
+          as: 'caseWorker',
+          attributes: ['id', 'firstName', 'lastName', 'email'],
+          required: false
+        }
+      ]
+    });
+    
+    res.status(201).json({
+      success: true,
+      message: 'Appointment scheduled successfully',
+      data: appointmentWithAssociations
+    });
+  } catch (error) {
+    console.error('Database error in POST /appointments:', error);
+    res.status(400).json({ 
+      success: false, 
+      error: error.message,
+      message: 'Failed to create appointment'
+    });
+  }
+});
+
+// PUT /api/appointments/:id - Randevuyu güncelle
+router.put('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const updates = req.body;
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid appointment ID',
+        message: 'Appointment ID must be a number'
+      });
+    }
+
+    const appointment = await Appointment.findByPk(id);
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Appointment not found',
+        message: `Appointment with ID ${id} does not exist`
+      });
+    }
+
+    // Validate user exists (if updating userId)
+    if (updates.userId) {
+      const user = await User.findByPk(updates.userId);
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid user ID',
+          message: `User with ID ${updates.userId} does not exist`
+        });
+      }
+    }
+
+    // Validate case worker exists (if updating caseWorkerId)
+    if (updates.caseWorkerId) {
+      const caseWorker = await CaseWorker.findByPk(updates.caseWorkerId);
+      if (!caseWorker) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid case worker ID',
+          message: `Case worker with ID ${updates.caseWorkerId} does not exist`
+        });
+      }
+    }
+
+    // Check for conflicts if updating date/time
+    if ((updates.date || updates.time) && updates.userId !== appointment.userId) {
+      const conflictingAppointment = await Appointment.findOne({
+        where: {
+          userId: updates.userId || appointment.userId,
+          date: updates.date || appointment.date,
+          time: updates.time || appointment.time,
+          id: { [Op.not]: id },
+          status: { [Op.not]: 'cancelled' }
+        }
+      });
+
+      if (conflictingAppointment) {
+        return res.status(400).json({
+          success: false,
+          error: 'Appointment conflict',
+          message: 'Another appointment exists at this time'
+        });
+      }
+    }
+
+    await appointment.update(updates);
+
+    // Fetch updated appointment with associations
+    const updatedAppointment = await Appointment.findByPk(id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+        },
+        {
+          model: CaseWorker,
+          as: 'caseWorker',
+          attributes: ['id', 'firstName', 'lastName', 'email'],
+          required: false
+        }
+      ]
+    });
+
+    res.json({
+      success: true,
+      data: updatedAppointment,
+      message: 'Appointment updated successfully'
+    });
+  } catch (error) {
+    console.error('Database error in PUT /appointments/:id:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to update appointment'
+    });
+  }
+});
+
+// DELETE /api/appointments/:id - Randevuyu sil
+router.delete('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid appointment ID',
+        message: 'Appointment ID must be a number'
+      });
+    }
+
+    const appointment = await Appointment.findByPk(id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName']
+        }
+      ]
+    });
+
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Appointment not found',
+        message: `Appointment with ID ${id} does not exist`
+      });
+    }
+
+    await appointment.destroy();
+
+    res.json({
+      success: true,
+      data: appointment,
+      message: 'Appointment deleted successfully'
+    });
+  } catch (error) {
+    console.error('Database error in DELETE /appointments/:id:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to delete appointment'
+    });
+  }
+});
+
+// PATCH /api/appointments/:id/status - Randevu durumunu güncelle
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { status, notes } = req.body;
+
+    if (isNaN(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid appointment ID',
+        message: 'Appointment ID must be a number'
+      });
+    }
+
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing status',
+        message: 'Status is required'
+      });
+    }
+
+    // Validate status
+    const validStatuses = ['scheduled', 'completed', 'cancelled', 'no-show'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid status',
+        message: `Status must be one of: ${validStatuses.join(', ')}`
+      });
+    }
+
+    const appointment = await Appointment.findByPk(id);
+    if (!appointment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Appointment not found',
+        message: `Appointment with ID ${id} does not exist`
+      });
+    }
+
+    const updateData = { status };
+    if (notes) {
+      updateData.notes = notes;
+    }
+
+    await appointment.update(updateData);
+
+    res.json({
+      success: true,
+      data: appointment,
+      message: `Appointment status updated to ${status}`
+    });
+  } catch (error) {
+    console.error('Database error in PATCH /appointments/:id/status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to update appointment status'
+    });
+  }
+});
+
+// GET /api/appointments/user/:userId - Kullanıcının randevularını getir
+router.get('/user/:userId', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const { status, upcoming } = req.query;
+
+    if (isNaN(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID',
+        message: 'User ID must be a number'
+      });
+    }
+
+    let whereClause = { userId };
+
+    if (status) {
+      whereClause.status = status;
+    }
+
+    if (upcoming === 'true') {
+      const today = new Date().toISOString().split('T')[0];
+      whereClause.date = { [Op.gte]: today };
+    }
+
+    const appointments = await Appointment.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: CaseWorker,
+          as: 'caseWorker',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'phone'],
+          required: false
+        }
+      ],
+      order: [['date', 'ASC'], ['time', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      count: appointments.length,
+      data: appointments
+    });
+  } catch (error) {
+    console.error('Database error in GET /appointments/user/:userId:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to retrieve user appointments'
+    });
+  }
+});
+
+module.exports = router;
